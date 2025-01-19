@@ -25,7 +25,17 @@ from vllm.model_executor.layers.quantization import (QuantizationConfig,
                                                      get_quantization_config)
 from vllm.model_executor.layers.quantization.schema import QuantParamSchema
 from vllm.platforms import current_platform
-from vllm.utils import print_warning_once
+from vllm.utils import PlaceholderModule
+
+try:
+    from runai_model_streamer import SafetensorsStreamer
+except (ImportError, OSError):
+    # see https://github.com/run-ai/runai-model-streamer/issues/26
+    # OSError will be raised on arm64 platform
+    runai_model_streamer = PlaceholderModule(
+        "runai_model_streamer")  # type: ignore[assignment]
+    SafetensorsStreamer = runai_model_streamer.placeholder_attr(
+        "SafetensorsStreamer")
 
 logger = init_logger(__name__)
 
@@ -188,7 +198,7 @@ def get_quant_config(model_config: ModelConfig,
             f"{quant_config_files}")
 
     quant_config_file = quant_config_files[0]
-    with open(quant_config_file, "r") as f:
+    with open(quant_config_file) as f:
         config = json.load(f)
 
         if model_config.quantization == "bitsandbytes":
@@ -306,7 +316,7 @@ def filter_duplicate_safetensors_files(hf_weights_files: List[str],
 
     # Iterate through the weight_map (weight_name: safetensors files)
     # to identify weights that we should use.
-    with open(index_file_name, "r") as f:
+    with open(index_file_name) as f:
         weight_map = json.load(f)["weight_map"]
     weight_files_in_index = set()
     for weight_name in weight_map:
@@ -382,7 +392,7 @@ def np_cache_weights_iterator(
             with open(weight_names_file, "w") as f:
                 json.dump(weight_names, f)
 
-    with open(weight_names_file, "r") as f:
+    with open(weight_names_file) as f:
         weight_names = json.load(f)
 
     for name in weight_names:
@@ -410,6 +420,23 @@ def safetensors_weights_iterator(
                 yield name, param
 
 
+def runai_safetensors_weights_iterator(
+    hf_weights_files: List[str]
+) -> Generator[Tuple[str, torch.Tensor], None, None]:
+    """Iterate over the weights in the model safetensor files."""
+    enable_tqdm = not torch.distributed.is_initialized(
+    ) or torch.distributed.get_rank() == 0
+    with SafetensorsStreamer() as streamer:
+        for st_file in tqdm(
+                hf_weights_files,
+                desc="Loading safetensors using Runai Model Streamer",
+                disable=not enable_tqdm,
+                bar_format=_BAR_FORMAT,
+        ):
+            streamer.stream_file(st_file)
+            yield from streamer.get_tensors()
+
+
 def pt_weights_iterator(
     hf_weights_files: List[str]
 ) -> Generator[Tuple[str, torch.Tensor], None, None]:
@@ -423,8 +450,7 @@ def pt_weights_iterator(
             bar_format=_BAR_FORMAT,
     ):
         state = torch.load(bin_file, map_location="cpu")
-        for name, param in state.items():
-            yield name, param
+        yield from state.items()
         del state
         torch.cuda.empty_cache()
 
@@ -479,7 +505,8 @@ def kv_cache_scales_loader(
     KV cache scaling factors. The serialization should represent a dictionary
     whose keys are the TP ranks and values are another dictionary mapping layers
     to their KV cache scaling factors.
-    Keep this function in sync with the output of examples/fp8/extract_scales.py
+    Keep this function in sync with the output of
+    examples/other/fp8/extract_scales.py
     """
     try:
         with open(filename) as f:
@@ -648,7 +675,7 @@ def maybe_remap_kv_scale_name(name: str, params_dict: dict) -> Optional[str]:
         None: If the remapped name is not found in params_dict.
     """
     if name.endswith(".kv_scale"):
-        print_warning_once(
+        logger.warning_once(
             "DEPRECATED. Found kv_scale in the checkpoint. "
             "This format is deprecated in favor of separate k_scale and "
             "v_scale tensors and will be removed in a future release. "
@@ -657,7 +684,7 @@ def maybe_remap_kv_scale_name(name: str, params_dict: dict) -> Optional[str]:
         # NOTE: we remap the deprecated kv_scale to k_scale
         remapped_name = name.replace(".kv_scale", ".attn.k_scale")
         if remapped_name not in params_dict:
-            print_warning_once(
+            logger.warning_once(
                 f"Found kv_scale in the checkpoint (e.g. {name}), "
                 "but not found the expected name in the model "
                 f"(e.g. {remapped_name}). kv_scale is "
@@ -670,7 +697,7 @@ def maybe_remap_kv_scale_name(name: str, params_dict: dict) -> Optional[str]:
         if name.endswith(scale_name):
             remapped_name = name.replace(scale_name, f".attn{scale_name}")
             if remapped_name not in params_dict:
-                print_warning_once(
+                logger.warning_once(
                     f"Found {scale_name} in the checkpoint (e.g. {name}), "
                     "but not found the expected name in the model "
                     f"(e.g. {remapped_name}). {scale_name} is "

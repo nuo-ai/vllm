@@ -58,8 +58,8 @@ function (hipify_sources_target OUT_SRCS NAME ORIG_SRCS)
   #
   set(SRCS ${ORIG_SRCS})
   set(CXX_SRCS ${ORIG_SRCS})
-  list(FILTER SRCS EXCLUDE REGEX "\.(cc)|(cpp)$")
-  list(FILTER CXX_SRCS INCLUDE REGEX "\.(cc)|(cpp)$")
+  list(FILTER SRCS EXCLUDE REGEX "\.(cc)|(cpp)|(hip)$")
+  list(FILTER CXX_SRCS INCLUDE REGEX "\.(cc)|(cpp)|(hip)$")
 
   #
   # Generate ROCm/HIP source file names from CUDA file names.
@@ -424,11 +424,7 @@ function (define_gpu_extension_target GPU_MOD_NAME)
   # Don't use `TORCH_LIBRARIES` for CUDA since it pulls in a bunch of
   # dependencies that are not necessary and may not be installed.
   if (GPU_LANGUAGE STREQUAL "CUDA")
-    if ("${CUDA_CUDA_LIB}" STREQUAL "")
-      set(CUDA_CUDA_LIB "${CUDA_CUDA_LIBRARY}")
-    endif()
-    target_link_libraries(${GPU_MOD_NAME} PRIVATE ${CUDA_CUDA_LIB}
-      ${CUDA_LIBRARIES})
+    target_link_libraries(${GPU_MOD_NAME} PRIVATE CUDA::cudart CUDA::cuda_driver)
   else()
     target_link_libraries(${GPU_MOD_NAME} PRIVATE ${TORCH_LIBRARIES})
   endif()

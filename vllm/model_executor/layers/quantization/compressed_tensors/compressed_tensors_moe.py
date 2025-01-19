@@ -6,7 +6,9 @@ import torch
 from compressed_tensors import CompressionFormat
 from compressed_tensors.quantization import QuantizationStrategy
 
+import vllm.model_executor.layers.fused_moe  # noqa
 from vllm import _custom_ops as ops
+from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import (FusedMoE, FusedMoEMethodBase,
                                                   FusedMoeWeightScaleSupported)
 from vllm.model_executor.layers.quantization.compressed_tensors.schemes import (
@@ -14,7 +16,9 @@ from vllm.model_executor.layers.quantization.compressed_tensors.schemes import (
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
     all_close_1d, normalize_e4m3fn_to_e4m3fnuz, per_tensor_dequantize)
 from vllm.model_executor.utils import set_weight_attrs
-from vllm.utils import is_hip, print_warning_once
+from vllm.platforms import current_platform
+
+logger = init_logger(__name__)
 
 
 class GPTQMarlinState(Enum):
@@ -140,17 +144,17 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
                     "activation scales are None.")
             if (not all_close_1d(layer.w13_input_scale)
                     or not all_close_1d(layer.w2_input_scale)):
-                print_warning_once(
+                logger.warning_once(
                     "Found input_scales that are not equal for "
                     "fp8 MoE layer. Using the maximum across experts "
-                    "for each layer. ")
+                    "for each layer.")
             layer.w13_input_scale = torch.nn.Parameter(
                 layer.w13_input_scale.max(), requires_grad=False)
             layer.w2_input_scale = torch.nn.Parameter(
                 layer.w2_input_scale.max(), requires_grad=False)
 
         # If rocm, normalize the weights and scales to e4m3fnuz
-        if is_hip():
+        if current_platform.is_rocm():
             # Normalize the weights and scales
             w13_weight, w13_weight_scale, w13_input_scale = \
                 normalize_e4m3fn_to_e4m3fnuz(
@@ -201,13 +205,14 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
         x: torch.Tensor,
         router_logits: torch.Tensor,
         top_k: int,
-        renormalize: bool = True,
+        renormalize: bool,
         use_grouped_topk: bool = False,
-        num_expert_group: Optional[int] = None,
         topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
         custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-
         from vllm.model_executor.layers.fused_moe import fused_experts
 
         topk_weights, topk_ids = FusedMoE.select_experts(
@@ -218,7 +223,9 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
             renormalize=renormalize,
             topk_group=topk_group,
             num_expert_group=num_expert_group,
-            custom_routing_function=custom_routing_function)
+            custom_routing_function=custom_routing_function,
+            scoring_func=scoring_func,
+            e_score_correction_bias=e_score_correction_bias)
 
         return fused_experts(x,
                              layer.w13_weight,
@@ -245,7 +252,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
         config = self.quant_config.target_scheme_map["Linear"].get("weights")
         self.num_bits = config.num_bits
         self.packed_factor = 32 // config.num_bits
-        self.strategy = config.strategy.value
+        self.strategy = config.strategy
         self.group_size = config.group_size
         assert config.symmetric, (
             "Only symmetric quantization is supported for MoE")
@@ -474,15 +481,14 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
         x: torch.Tensor,
         router_logits: torch.Tensor,
         top_k: int,
-        renormalize: bool = True,
+        renormalize: bool,
         use_grouped_topk: bool = False,
-        num_expert_group: Optional[int] = None,
         topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
         custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-
-        from vllm.model_executor.layers.fused_moe.fused_marlin_moe import (
-            fused_marlin_moe)
 
         topk_weights, topk_ids = FusedMoE.select_experts(
             hidden_states=x,
@@ -492,9 +498,11 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
             renormalize=renormalize,
             topk_group=topk_group,
             num_expert_group=num_expert_group,
-            custom_routing_function=custom_routing_function)
+            custom_routing_function=custom_routing_function,
+            scoring_func=scoring_func,
+            e_score_correction_bias=e_score_correction_bias)
 
-        return fused_marlin_moe(
+        return torch.ops.vllm.fused_marlin_moe(
             x,
             layer.w13_weight_packed,
             layer.w2_weight_packed,

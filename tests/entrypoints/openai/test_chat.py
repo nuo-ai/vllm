@@ -17,6 +17,8 @@ from .test_completion import zephyr_lora_files  # noqa: F401
 # any model with a chat template should work here
 MODEL_NAME = "HuggingFaceH4/zephyr-7b-beta"
 
+GUIDED_DECODING_BACKENDS = ["outlines", "lm-format-enforcer", "xgrammar"]
+
 
 @pytest.fixture(scope="module")
 def server(zephyr_lora_files, zephyr_lora_added_tokens_files):  # noqa: F811
@@ -65,11 +67,12 @@ async def test_no_logprobs_chat(client: openai.AsyncOpenAI, model_name: str):
         "content": "what is 1+1?"
     }]
 
-    chat_completion = await client.chat.completions.create(model=model_name,
-                                                           messages=messages,
-                                                           max_tokens=5,
-                                                           temperature=0.0,
-                                                           logprobs=False)
+    chat_completion = await client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=5,
+        temperature=0.0,
+        logprobs=False)
 
     choice = chat_completion.choices[0]
     assert choice.logprobs is None
@@ -90,12 +93,13 @@ async def test_zero_logprobs_chat(client: openai.AsyncOpenAI, model_name: str):
         "content": "what is 1+1?"
     }]
 
-    chat_completion = await client.chat.completions.create(model=model_name,
-                                                           messages=messages,
-                                                           max_tokens=5,
-                                                           temperature=0.0,
-                                                           logprobs=True,
-                                                           top_logprobs=0)
+    chat_completion = await client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=5,
+        temperature=0.0,
+        logprobs=True,
+        top_logprobs=0)
 
     choice = chat_completion.choices[0]
     assert choice.logprobs is not None
@@ -117,12 +121,13 @@ async def test_some_logprobs_chat(client: openai.AsyncOpenAI, model_name: str):
         "content": "what is 1+1?"
     }]
 
-    chat_completion = await client.chat.completions.create(model=model_name,
-                                                           messages=messages,
-                                                           max_tokens=5,
-                                                           temperature=0.0,
-                                                           logprobs=True,
-                                                           top_logprobs=5)
+    chat_completion = await client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=5,
+        temperature=0.0,
+        logprobs=True,
+        top_logprobs=5)
 
     choice = chat_completion.choices[0]
     assert choice.logprobs is not None
@@ -149,7 +154,7 @@ async def test_too_many_chat_logprobs(client: openai.AsyncOpenAI,
     with pytest.raises((openai.BadRequestError, openai.APIError)):
         stream = await client.chat.completions.create(model=model_name,
                                                       messages=messages,
-                                                      max_tokens=10,
+                                                      max_completion_tokens=10,
                                                       logprobs=True,
                                                       top_logprobs=21,
                                                       stream=True)
@@ -159,16 +164,17 @@ async def test_too_many_chat_logprobs(client: openai.AsyncOpenAI,
     with pytest.raises(openai.BadRequestError):
         await client.chat.completions.create(model=model_name,
                                              messages=messages,
-                                             max_tokens=10,
+                                             max_completion_tokens=10,
                                              logprobs=True,
                                              top_logprobs=30,
                                              stream=False)
 
     # the server should still work afterwards
-    chat_completion = await client.chat.completions.create(model=model_name,
-                                                           messages=messages,
-                                                           max_tokens=10,
-                                                           stream=False)
+    chat_completion = await client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=10,
+        stream=False)
     message = chat_completion.choices[0].message
     assert message.content is not None and len(message.content) >= 0
 
@@ -271,11 +277,12 @@ async def test_single_chat_session(client: openai.AsyncOpenAI,
     }]
 
     # test single completion
-    chat_completion = await client.chat.completions.create(model=model_name,
-                                                           messages=messages,
-                                                           max_tokens=10,
-                                                           logprobs=True,
-                                                           top_logprobs=5)
+    chat_completion = await client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_completion_tokens=10,
+        logprobs=True,
+        top_logprobs=5)
     assert chat_completion.id is not None
     assert len(chat_completion.choices) == 1
 
@@ -294,7 +301,7 @@ async def test_single_chat_session(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=model_name,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
     )
     message = chat_completion.choices[0].message
     assert message.content is not None and len(message.content) >= 0
@@ -319,7 +326,7 @@ async def test_chat_streaming(client: openai.AsyncOpenAI, model_name: str):
     chat_completion = await client.chat.completions.create(
         model=model_name,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
         temperature=0.0,
     )
     output = chat_completion.choices[0].message.content
@@ -329,7 +336,7 @@ async def test_chat_streaming(client: openai.AsyncOpenAI, model_name: str):
     stream = await client.chat.completions.create(
         model=model_name,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
         temperature=0.0,
         stream=True,
     )
@@ -369,7 +376,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
     stream = await client.chat.completions.create(
         model=model_name,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
         temperature=0.0,
         stream=True,
         stream_options={"include_usage": False})
@@ -380,7 +387,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
     #                                   "continuous_usage_stats": False}}
     stream = await client.chat.completions.create(model=model_name,
                                                   messages=messages,
-                                                  max_tokens=10,
+                                                  max_completion_tokens=10,
                                                   temperature=0.0,
                                                   stream=True,
                                                   stream_options={
@@ -409,7 +416,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
         await client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
             temperature=0.0,
             stream=False,
             stream_options={"include_usage": None})
@@ -419,7 +426,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
         await client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
             temperature=0.0,
             stream=False,
             stream_options={"include_usage": True})
@@ -429,7 +436,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
     stream = await client.chat.completions.create(
         model=model_name,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
         extra_body=dict(min_tokens=10),
         temperature=0.0,
         stream=True,
@@ -459,8 +466,7 @@ async def test_chat_completion_stream_options(client: openai.AsyncOpenAI,
 # will fail on the second `guided_decoding_backend` even when I swap their order
 # (ref: https://github.com/vllm-project/vllm/pull/5526#issuecomment-2173772256)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend",
-                         ["outlines", "lm-format-enforcer"])
+@pytest.mark.parametrize("guided_decoding_backend", GUIDED_DECODING_BACKENDS)
 async def test_guided_choice_chat(client: openai.AsyncOpenAI,
                                   guided_decoding_backend: str,
                                   sample_guided_choice):
@@ -476,7 +482,8 @@ async def test_guided_choice_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
+        temperature=0.7,
         extra_body=dict(guided_choice=sample_guided_choice,
                         guided_decoding_backend=guided_decoding_backend))
     choice1 = chat_completion.choices[0].message.content
@@ -490,7 +497,8 @@ async def test_guided_choice_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
+        temperature=0.7,
         extra_body=dict(guided_choice=sample_guided_choice,
                         guided_decoding_backend=guided_decoding_backend))
     choice2 = chat_completion.choices[0].message.content
@@ -499,8 +507,7 @@ async def test_guided_choice_chat(client: openai.AsyncOpenAI,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend",
-                         ["outlines", "lm-format-enforcer"])
+@pytest.mark.parametrize("guided_decoding_backend", GUIDED_DECODING_BACKENDS)
 async def test_guided_json_chat(client: openai.AsyncOpenAI,
                                 guided_decoding_backend: str,
                                 sample_json_schema):
@@ -517,7 +524,7 @@ async def test_guided_json_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=1000,
+        max_completion_tokens=1000,
         extra_body=dict(guided_json=sample_json_schema,
                         guided_decoding_backend=guided_decoding_backend))
     message = chat_completion.choices[0].message
@@ -535,7 +542,7 @@ async def test_guided_json_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=1000,
+        max_completion_tokens=1000,
         extra_body=dict(guided_json=sample_json_schema,
                         guided_decoding_backend=guided_decoding_backend))
     message = chat_completion.choices[0].message
@@ -547,8 +554,7 @@ async def test_guided_json_chat(client: openai.AsyncOpenAI,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend",
-                         ["outlines", "lm-format-enforcer"])
+@pytest.mark.parametrize("guided_decoding_backend", GUIDED_DECODING_BACKENDS)
 async def test_guided_regex_chat(client: openai.AsyncOpenAI,
                                  guided_decoding_backend: str, sample_regex):
     messages = [{
@@ -563,7 +569,7 @@ async def test_guided_regex_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=20,
+        max_completion_tokens=20,
         extra_body=dict(guided_regex=sample_regex,
                         guided_decoding_backend=guided_decoding_backend))
     ip1 = chat_completion.choices[0].message.content
@@ -575,7 +581,7 @@ async def test_guided_regex_chat(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=20,
+        max_completion_tokens=20,
         extra_body=dict(guided_regex=sample_regex,
                         guided_decoding_backend=guided_decoding_backend))
     ip2 = chat_completion.choices[0].message.content
@@ -606,8 +612,7 @@ async def test_guided_decoding_type_error(client: openai.AsyncOpenAI):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend",
-                         ["outlines", "lm-format-enforcer"])
+@pytest.mark.parametrize("guided_decoding_backend", GUIDED_DECODING_BACKENDS)
 async def test_guided_choice_chat_logprobs(client: openai.AsyncOpenAI,
                                            guided_decoding_backend: str,
                                            sample_guided_choice):
@@ -623,7 +628,7 @@ async def test_guided_choice_chat_logprobs(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=10,
+        max_completion_tokens=10,
         logprobs=True,
         top_logprobs=5,
         extra_body=dict(guided_choice=sample_guided_choice,
@@ -639,8 +644,7 @@ async def test_guided_choice_chat_logprobs(client: openai.AsyncOpenAI,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend",
-                         ["outlines", "lm-format-enforcer"])
+@pytest.mark.parametrize("guided_decoding_backend", GUIDED_DECODING_BACKENDS)
 async def test_named_tool_use(client: openai.AsyncOpenAI,
                               guided_decoding_backend: str,
                               sample_json_schema):
@@ -660,7 +664,7 @@ async def test_named_tool_use(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=1000,
+        max_completion_tokens=1000,
         tools=[{
             "type": "function",
             "function": {
@@ -674,7 +678,8 @@ async def test_named_tool_use(client: openai.AsyncOpenAI,
             "function": {
                 "name": "dummy_function_name"
             }
-        })
+        },
+        extra_body=dict(guided_decoding_backend=guided_decoding_backend))
     message = chat_completion.choices[0].message
     assert len(message.content) == 0
     json_string = message.tool_calls[0].function.arguments
@@ -694,7 +699,7 @@ async def test_named_tool_use(client: openai.AsyncOpenAI,
     stream = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
-        max_tokens=1000,
+        max_completion_tokens=1000,
         tools=[{
             "type": "function",
             "function": {
@@ -709,6 +714,7 @@ async def test_named_tool_use(client: openai.AsyncOpenAI,
                 "name": "dummy_function_name"
             }
         },
+        extra_body=dict(guided_decoding_backend=guided_decoding_backend),
         stream=True)
 
     output = []
@@ -731,10 +737,8 @@ async def test_named_tool_use(client: openai.AsyncOpenAI,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend", ["outlines"])
-async def test_required_tool_use_not_yet_supported(
-        client: openai.AsyncOpenAI, guided_decoding_backend: str,
-        sample_json_schema):
+async def test_required_tool_use_not_yet_supported(client: openai.AsyncOpenAI,
+                                                   sample_json_schema):
     messages = [{
         "role": "system",
         "content": "you are a helpful assistant"
@@ -750,7 +754,7 @@ async def test_required_tool_use_not_yet_supported(
         await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
-            max_tokens=1000,
+            max_completion_tokens=1000,
             tools=[{
                 "type": "function",
                 "function": {
@@ -765,7 +769,7 @@ async def test_required_tool_use_not_yet_supported(
         await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
-            max_tokens=1000,
+            max_completion_tokens=1000,
             tools=[{
                 "type": "function",
                 "function": {
@@ -778,9 +782,7 @@ async def test_required_tool_use_not_yet_supported(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("guided_decoding_backend", ["outlines"])
 async def test_inconsistent_tool_choice_and_tools(client: openai.AsyncOpenAI,
-                                                  guided_decoding_backend: str,
                                                   sample_json_schema):
     messages = [{
         "role": "system",
@@ -796,7 +798,7 @@ async def test_inconsistent_tool_choice_and_tools(client: openai.AsyncOpenAI,
     with pytest.raises(openai.BadRequestError):
         await client.chat.completions.create(model=MODEL_NAME,
                                              messages=messages,
-                                             max_tokens=1000,
+                                             max_completion_tokens=1000,
                                              tool_choice={
                                                  "type": "function",
                                                  "function": {
@@ -809,7 +811,7 @@ async def test_inconsistent_tool_choice_and_tools(client: openai.AsyncOpenAI,
         await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
-            max_tokens=1000,
+            max_completion_tokens=1000,
             tools=[{
                 "type": "function",
                 "function": {
@@ -824,6 +826,20 @@ async def test_inconsistent_tool_choice_and_tools(client: openai.AsyncOpenAI,
                     "name": "nondefined_function_name"
                 }
             })
+    with pytest.raises(openai.BadRequestError):
+        await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            max_completion_tokens=1000,
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "dummy_function_name",
+                    "description": "This is a dummy function",
+                    "parameters": sample_json_schema
+                }
+            }],
+            tool_choice={})
 
 
 @pytest.mark.asyncio
@@ -894,19 +910,19 @@ async def test_response_format_json_schema(client: openai.AsyncOpenAI):
 
 
 @pytest.mark.asyncio
-async def test_extra_fields(client: openai.AsyncOpenAI):
-    with pytest.raises(BadRequestError) as exc_info:
-        await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{
-                "role": "system",
-                "content": "You are a helpful assistant.",
-                "extra_field": "0",
-            }],  # type: ignore
-            temperature=0,
-            seed=0)
+async def test_extra_fields_allowed(client: openai.AsyncOpenAI):
+    resp = await client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{
+            "role": "user",
+            "content": "what is 1+1?",
+            "extra_field": "0",
+        }],  # type: ignore
+        temperature=0,
+        seed=0)
 
-    assert "extra_forbidden" in exc_info.value.message
+    content = resp.choices[0].message.content
+    assert content is not None
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     VLLM_RPC_BASE_PATH: str = tempfile.gettempdir()
     VLLM_USE_MODELSCOPE: bool = False
     VLLM_RINGBUFFER_WARNING_INTERVAL: int = 60
-    VLLM_INSTANCE_ID: Optional[str] = None
     VLLM_NCCL_SO_PATH: Optional[str] = None
     LD_LIBRARY_PATH: Optional[str] = None
     VLLM_USE_TRITON_FLASH_ATTN: bool = False
@@ -31,7 +30,7 @@ if TYPE_CHECKING:
     VLLM_LOGGING_CONFIG_PATH: Optional[str] = None
     VLLM_TRACE_FUNCTION: int = 0
     VLLM_ATTENTION_BACKEND: Optional[str] = None
-    VLLM_USE_FLASHINFER_SAMPLER: bool = False
+    VLLM_USE_FLASHINFER_SAMPLER: Optional[bool] = None
     VLLM_USE_FLASHINFER_REJECTION_SAMPLER: bool = False
     VLLM_FLASHINFER_FORCE_TENSOR_CORES: bool = False
     VLLM_PP_LAYER_PARTITION: Optional[str] = None
@@ -46,10 +45,12 @@ if TYPE_CHECKING:
     VLLM_USE_RAY_SPMD_WORKER: bool = False
     VLLM_USE_RAY_COMPILED_DAG: bool = False
     VLLM_USE_RAY_COMPILED_DAG_NCCL_CHANNEL: bool = True
+    VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM: bool = False
     VLLM_WORKER_MULTIPROC_METHOD: str = "fork"
     VLLM_ASSETS_CACHE: str = os.path.join(VLLM_CACHE_ROOT, "assets")
     VLLM_IMAGE_FETCH_TIMEOUT: int = 5
-    VLLM_AUDIO_FETCH_TIMEOUT: int = 5
+    VLLM_VIDEO_FETCH_TIMEOUT: int = 30
+    VLLM_AUDIO_FETCH_TIMEOUT: int = 10
     VLLM_TARGET_DEVICE: str = "cuda"
     MAX_JOBS: Optional[str] = None
     NVCC_THREADS: Optional[str] = None
@@ -66,10 +67,11 @@ if TYPE_CHECKING:
     VLLM_USE_TRITON_AWQ: bool = False
     VLLM_ALLOW_RUNTIME_LORA_UPDATING: bool = False
     VLLM_SKIP_P2P_CHECK: bool = False
-    VLLM_TORCH_COMPILE_LEVEL: int = 0
-    VLLM_CUSTOM_OPS: List[str] = []
     VLLM_DISABLED_KERNELS: List[str] = []
     VLLM_USE_V1: bool = False
+    VLLM_ENABLE_V1_MULTIPROCESSING: bool = True
+    VLLM_LOG_BATCHSIZE_INTERVAL: float = -1
+    VLLM_DISABLE_COMPILE_CACHE: bool = False
 
 
 def get_default_cache_root():
@@ -113,7 +115,8 @@ environment_variables: Dict[str, Callable[[], Any]] = {
 
     # If set, vllm will use precompiled binaries (*.so)
     "VLLM_USE_PRECOMPILED":
-    lambda: bool(os.environ.get("VLLM_USE_PRECOMPILED")),
+    lambda: bool(os.environ.get("VLLM_USE_PRECOMPILED")) or bool(
+        os.environ.get("VLLM_PRECOMPILED_WHEEL_LOCATION")),
 
     # CMake build type
     # If not set, defaults to "Debug" or "RelWithDebInfo"
@@ -153,7 +156,7 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # If you are using multi-node inference, you should set this differently
     # on each node.
     'VLLM_HOST_IP':
-    lambda: os.getenv('VLLM_HOST_IP', "") or os.getenv("HOST_IP", ""),
+    lambda: os.getenv('VLLM_HOST_IP', ""),
 
     # used in distributed environment to manually set the communication port
     # Note: if VLLM_PORT is set, and some code asks for multiple ports, the
@@ -173,11 +176,6 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # note that the value is true or false, not numbers
     "VLLM_USE_MODELSCOPE":
     lambda: os.environ.get("VLLM_USE_MODELSCOPE", "False").lower() == "true",
-
-    # Instance id represents an instance of the VLLM. All processes in the same
-    # instance should have the same instance id.
-    "VLLM_INSTANCE_ID":
-    lambda: os.environ.get("VLLM_INSTANCE_ID", None),
 
     # Interval in seconds to log a warning message when the ring buffer is full
     "VLLM_RINGBUFFER_WARNING_INTERVAL":
@@ -207,19 +205,7 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     "VLLM_TEST_DYNAMO_FULLGRAPH_CAPTURE":
     lambda: bool(
         os.environ.get("VLLM_TEST_DYNAMO_FULLGRAPH_CAPTURE", "1") != "0"),
-    "VLLM_TORCH_COMPILE_LEVEL":
-    lambda: int(os.environ.get("VLLM_TORCH_COMPILE_LEVEL", "0")),
-    # Fine-grained control over which custom ops to enable/disable.
-    # Use 'all' to enable all, 'none' to disable all.
-    # Also specify a list of custom op names to enable (prefixed with a '+'),
-    # or disable (prefixed with a '-').
-    # Examples:
-    # - 'all,-op1' to enable all except op1
-    # - 'none,+op1,+op2' to enable only op1 and op2
-    # By default, all custom ops are enabled when running without Inductor
-    # and disabled when running with Inductor (compile_level >= Inductor).
-    "VLLM_CUSTOM_OPS":
-    lambda: os.environ.get("VLLM_CUSTOM_OPS", "").replace(" ", "").split(","),
+
     # local rank of the process in the distributed setting, used to determine
     # the GPU device id
     "LOCAL_RANK":
@@ -291,7 +277,8 @@ environment_variables: Dict[str, Callable[[], Any]] = {
 
     # If set, vllm will use flashinfer sampler
     "VLLM_USE_FLASHINFER_SAMPLER":
-    lambda: bool(int(os.getenv("VLLM_USE_FLASHINFER_SAMPLER", "0"))),
+    lambda: bool(int(os.environ["VLLM_USE_FLASHINFER_SAMPLER"]))
+    if "VLLM_USE_FLASHINFER_SAMPLER" in os.environ else None,
 
     # If set, vllm will force flashinfer to use tensor cores;
     # otherwise will use heuristic based on model architecture.
@@ -353,6 +340,13 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     lambda: bool(int(os.getenv("VLLM_USE_RAY_COMPILED_DAG_NCCL_CHANNEL", "1"))
                  ),
 
+    # If the env var is set, it enables GPU communication overlap
+    # (experimental feature) in Ray's compiled DAG. This flag is ignored if
+    # VLLM_USE_RAY_COMPILED_DAG is not set.
+    "VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM":
+    lambda: bool(int(os.getenv("VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM", "0"))
+                 ),
+
     # Use dedicated multiprocess context for workers.
     # Both spawn and fork work
     "VLLM_WORKER_MULTIPROC_METHOD":
@@ -371,10 +365,15 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     "VLLM_IMAGE_FETCH_TIMEOUT":
     lambda: int(os.getenv("VLLM_IMAGE_FETCH_TIMEOUT", "5")),
 
+    # Timeout for fetching videos when serving multimodal models
+    # Default is 15 seconds
+    "VLLM_VIDEO_FETCH_TIMEOUT":
+    lambda: int(os.getenv("VLLM_VIDEO_FETCH_TIMEOUT", "15")),
+
     # Timeout for fetching audio when serving multimodal models
-    # Default is 5 seconds
+    # Default is 10 seconds
     "VLLM_AUDIO_FETCH_TIMEOUT":
-    lambda: int(os.getenv("VLLM_AUDIO_FETCH_TIMEOUT", "5")),
+    lambda: int(os.getenv("VLLM_AUDIO_FETCH_TIMEOUT", "10")),
 
     # Path to the XLA persistent cache directory.
     # Only used for XLA devices such as TPUs.
@@ -460,6 +459,14 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # If set, use the V1 code path.
     "VLLM_USE_V1":
     lambda: bool(int(os.getenv("VLLM_USE_V1", "0"))),
+
+    # If set, enable multiprocessing in LLM for the V1 code path.
+    "VLLM_ENABLE_V1_MULTIPROCESSING":
+    lambda: bool(int(os.getenv("VLLM_ENABLE_V1_MULTIPROCESSING", "1"))),
+    "VLLM_LOG_BATCHSIZE_INTERVAL":
+    lambda: float(os.getenv("VLLM_LOG_BATCHSIZE_INTERVAL", "-1")),
+    "VLLM_DISABLE_COMPILE_CACHE":
+    lambda: bool(int(os.getenv("VLLM_DISABLE_COMPILE_CACHE", "0"))),
 }
 
 # end-env-vars-definition
